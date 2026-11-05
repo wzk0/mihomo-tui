@@ -1,8 +1,6 @@
 # 🧭 mihomo-tui
 
-> mihomo（Clash.Meta）核心的终端控制台 —— 订阅管理、进程控制、控制器面板三合一，鼠标键盘都能用。
-
-原 [clash_tui](https://github.com/wzk0/clash_tui) 的 Dart 重写版：内核换成 mihomo，界面重做成带侧栏的 TUI，并接入了 mihomo 的 RESTful 控制器。
+> 一个以 mihomo（Clash.Meta）为核心的终端控制台 —— 订阅管理、进程控制、控制器面板三合一。
 
 ![](/screenshot/home.png)
 
@@ -10,13 +8,13 @@
 
 - 📦 **订阅**：增删改/更新配置文件
 - 🧩 **内核**：内置内核管理器，支持从 GitHub 官方一键下载/更新 mihomo，自动识别系统与架构；支持可选 ghproxy / gh-proxy / akams 镜像
-- ⚙️ **核心**：自动探测 mihomo、后台启动（关掉 TUI 也不停）、停止、重启、热重载、日志查看
+- ⚙️ **核心**：自动探测 mihomo、后台启动、停止、重启、热重载、日志查看
 - 📊 **面板**：模式切换、当前节点、连接与流量、代理组/节点切换、单点/整组测速、延迟排序
-- 🖱️ **交互**：鼠标点击、滚轮、双击支持
-- ⌨️ **文本编辑**：输入框支持 `Ctrl+A/C/V/X`、`Shift+方向键` 选中、长文本横向滚动
-- 🎨 **外观**：跟随终端深浅色，6 种强调色，不画背景色块，只显示终端自己的背景
-- 🚀 **顺手事**：一键开关系统代理、一键开机自启（systemd 用户服务 / Windows 启动项）、复制代理环境变量
-- 💾 **备份**：把设置、订阅索引和全部配置打包成 zip
+- 🖱️ **交互**：鼠标点击、滚轮、双击支持；纯键盘也行
+- ⌨️ **文本编辑**：输入框支持快捷键
+- 🎨 **外观**：跟随终端深浅色，6种自定义主题色
+- 🚀 **快捷操作**：一键开关系统代理、一键开机自启（systemd 用户服务 / Windows 启动项）、复制代理环境变量、浏览器启动第三方面板等
+- 💾 **备份**：一键将设置、订阅索引和全部配置打包成 zip
 - 🖥️ **平台**：Linux（amd64 / arm64 / armv7）与 Windows（amd64 / arm64），单文件无依赖
 
 ## 📥 安装
@@ -45,19 +43,23 @@ dart compile exe bin/mihomo_tui.dart -o build/mihomo-tui   # Windows 用 -o buil
 
 ## 🔌 内核
 
-程序不内置内核，可以自己准备，也可以让程序帮你下载。
+mihomo-tui 没有内置内核，可以自行下载指定路径，程序内也有下载与更新内核的功能。
 
 - 🧩 设置页「更新内核」：从 GitHub 官方获取最新版，自动识别平台与架构（`linux-amd64`、`linux-arm64`、`linux-armv7`、`windows-amd64`、`windows-arm64`），旧文件备份为 `.bak`
 - 🪞 「下载镜像」里可选直连或 ghproxy / gh-proxy / akams，并显示每个镜像的连通性检测结果
-- 命令行：`mihomo-tui --update-core --mirror gh-proxy`
+- 💻 命令行：`mihomo-tui --update-core --mirror gh-proxy`
 
-查找顺序：`--bin` → 设置页 → `MIHOMO_BIN` → 程序目录 → `mihomo/`、`core/` 子目录 → `PATH` 与常见路径。显式指定但文件不存在时会直接报错，不会悄悄换用别的内核。
+查找顺序：`--bin` → 设置页 → `MIHOMO_BIN` → 程序目录 → `mihomo/`、`core/` 子目录 → `PATH` 与常见路径。
+
+> ⚠️注意：显式指定但文件不存在时会报错。
 
 ## 🚀 使用
 
 ```sh
 mihomo-tui
 ```
+
+> 也可能需要先 chmod +x 一下
 
 首次使用：`2` 进订阅页 → `a` 添加订阅 → `Enter` 启用 → `1` 回概览 → `s` 启动核心。
 
@@ -80,8 +82,6 @@ mihomo-tui
 | 日志 | `s` `f` `r` `c` `g` `G`    | 密度（标准/精简/极简）/ 跟随 / 刷新 / 清空 / 首尾     |
 | 设置 | `Enter` `d` `i`            | 编辑或切换 / 重新检测核心 / 关于                      |
 
-弹窗内：`Tab` 换字段、`Enter` 提交、`Esc` 取消；`Ctrl+A/X/C/V` 全选/剪切/复制/粘贴，`Shift+方向键` 选中，`Ctrl+U/K/W/E` 行编辑。
-
 ## 📁 文件与目录
 
 | 路径                                                        | 内容                                             |
@@ -90,8 +90,8 @@ mihomo-tui
 | `…/profiles/<名称>.yaml`                                    | 每个订阅的原始配置                               |
 | `…/data.json`                                               | 订阅索引与当前启用项                             |
 | `…/settings.json`                                           | 内核路径、编辑器、下载代理、主题等               |
-| `…/logs/mihomo.log`                                         | 核心输出（超 5 MB 自动轮转）                     |
-| `…/run/mihomo.pid`                                          | 由本程序启动的核心进程号                         |
+| `…/logs/mihomo.log`                                         | 核心日志输出                                   |
+| `…/run/mihomo.pid`                                          | mihomo-tui 启动的核心进程号                     |
 | `~/.config/mihomo/config.yaml`                              | 核心读取的配置，`--home` 或 `MIHOMO_HOME` 可覆盖 |
 
 订阅下载会遵守 `http_proxy` / `https_proxy`（回环地址除外），也可在设置里单独指定代理。
@@ -103,7 +103,7 @@ mihomo-tui --export               # ~/mihomo-tui-export-<时间戳>.zip
 mihomo-tui --export backup.zip
 ```
 
-内含 `manifest.json`、`settings.json`、`data.json`、`profiles/*.yaml`、`mihomo/config.yaml` 与一份说明。
+内含 `manifest.json`、`settings.json`、`data.json`、`profiles/*.yaml`、`mihomo/config.yaml` 与说明文件。
 
 ## 💻 命令行
 
@@ -125,17 +125,10 @@ mihomo-tui --import-legacy ./我的配置   # 导入旧版数据
 mihomo-tui --import-legacy ./我的配置
 ```
 
-订阅、地址、更新时间都会带过来，启用逻辑与旧版一致。
-
 ## 🛠️ 开发与发布
 
 - `dart test` / `dart analyze` / `dart format`
-- CI：`.github/workflows/build.yml`，矩阵编译 Linux amd64/arm64/armv7 与 Windows amd64/arm64
-- 发布：推送 `v*` 标签自动构建并发 Release
-
-```sh
-git tag v1.1 && git push origin v1.1
-```
+- CI：`.github/workflows/build.yml`，钩子为 tag
 
 ## ⚠️ 已知限制
 
@@ -143,7 +136,9 @@ git tag v1.1 && git push origin v1.1
 - 系统代理一键开关支持 GNOME 与 Windows，其他桌面环境会提示手动配置
 - 由其他工具（如 mihomo-party）启动的核心会标记为"外部进程"，停止前需要确认
 - 代理页依赖配置里的 `external-controller`
+- Termux 原生环境无法使用（dart 的 AOT 问题），proot 可以
 
 ## 🙏 致谢
 
-内核为 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)。
+- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
+- Clash
