@@ -1,0 +1,164 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  DART_VERSION: 3.13.7
+
+jobs:
+  test:
+    name: analyze & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART_VERSION }}
+      - name: Install dependencies
+        run: dart pub get
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+      - name: Analyze
+        run: dart analyze --fatal-infos
+      - name: Unit tests
+        run: dart test
+      - name: Smoke test the compiled binary
+        run: |
+          mkdir -p dist
+          dart compile exe bin/mihomo_tui.dart -o dist/mihomo-tui
+          ./dist/mihomo-tui --version
+          ./dist/mihomo-tui --selftest
+          ./dist/mihomo-tui --help | head -5
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            binary: mihomo-tui
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            binary: mihomo-tui
+          - os: windows-latest
+            target: windows-amd64
+            binary: mihomo-tui.exe
+          - os: windows-11-arm
+            target: windows-arm64
+            binary: mihomo-tui.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART_VERSION }}
+      - name: Install dependencies
+        run: dart pub get
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Compile
+        shell: bash
+        run: |
+          mkdir -p dist
+          dart compile exe bin/mihomo_tui.dart -o "dist/${{ matrix.binary }}"
+      - name: Package (linux)
+        if: startsWith(matrix.target, 'linux')
+        shell: bash
+        run: |
+          name="mihomo-tui-${{ steps.tag.outputs.value }}-${{ matrix.target }}"
+          tar -czf "dist/${name}.tar.gz" -C dist "${{ matrix.binary }}"
+          rm -f "dist/${{ matrix.binary }}"
+      - name: Package (windows)
+        if: startsWith(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          $name = "mihomo-tui-${{ steps.tag.outputs.value }}-${{ matrix.target }}"
+          Compress-Archive -Path "dist/${{ matrix.binary }}" -DestinationPath "dist/$name.zip"
+          Remove-Item "dist/${{ matrix.binary }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  build-linux-armv7:
+    name: build linux-armv7 (qemu)
+    needs: test
+    # Dart's 32 bit ARM AOT toolchain runs under qemu-user here; failures are
+    # surfaced but do not block the other platform artifacts.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Compile inside an armv7 container
+        run: |
+          docker run --rm --platform linux/arm/v7 \
+            -v "$PWD:/work" -w /work \
+            -e DART_VERSION \
+            -e ASSET_NAME="mihomo-tui-${{ steps.tag.outputs.value }}-linux-armv7" \
+            arm32v7/debian:bookworm-slim \
+            bash tool/build-linux-arm.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-armv7
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    # Run even when one platform build failed: the other artifacts are still
+    # worth publishing (and a missing runner should not swallow the release).
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [build, build-linux-armv7]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          ls -la
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt || true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: false

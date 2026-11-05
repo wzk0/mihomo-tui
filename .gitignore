@@ -1,0 +1,13 @@
+# Dart
+.dart_tool/
+pubspec_overrides.yaml
+build/
+dist/
+
+# Local mihomo core binaries (downloaded manually, not part of the sources)
+mihomo/
+core/
+
+# Local test artifacts
+*.log
+*.part
