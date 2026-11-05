@@ -7,6 +7,7 @@ import 'dart:math' as math;
 
 import '../../model/settings.dart';
 import '../../service/autostart.dart';
+import '../../service/core_updater.dart';
 import '../../service/downloader.dart';
 import '../../util/format.dart';
 import '../../service/paths.dart';
@@ -76,6 +77,20 @@ class SettingsView extends View {
               editor: value,
               clearEditor: value.isEmpty,
             )),
+      ),
+      _Row(
+        '更新内核',
+        app.coreStatus?.version ?? '未安装',
+        '从 GitHub 官方获取与当前平台/架构匹配的内核（${CoreUpdater.platformLabel}）',
+        action: true,
+        onActivate: () => unawaited(app.updateCore()),
+      ),
+      _Row(
+        '下载镜像',
+        _mirrorValue(app),
+        '选择更新内核的下载源，打开后可看到各镜像的连通性',
+        action: true,
+        onActivate: app.showMirrorPicker,
       ),
       _Row(
         '下载代理',
@@ -148,6 +163,14 @@ class SettingsView extends View {
       _Row('关于', '$appName $appVersion', '终端界面 | 鼠标与键盘均可操作',
           action: true, onActivate: () => _about(app)),
     ];
+  }
+
+  String _mirrorValue(AppContext app) {
+    final current = mirrorById(app.settings.mirror);
+    if (app.isMirrorProbing(current.id)) return '${current.label}（检测中~）';
+    final probe = app.mirrorProbes[current.id];
+    if (probe == null) return current.label;
+    return '${current.label}（${probe.label}）';
   }
 
   String _autostartLabel(AppContext app) => switch (app.autostartState) {
@@ -248,6 +271,7 @@ class SettingsView extends View {
     if (row.onEdit == null) return;
     app.showOverlay(
       FormOverlay(
+        onChanged: app.requestFrame,
         title: row.label,
         description: [row.description],
         fields: [

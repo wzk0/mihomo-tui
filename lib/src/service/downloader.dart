@@ -6,6 +6,8 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
+import '../util/net.dart' as net;
+
 class DownloadException implements Exception {
   DownloadException(this.message);
 
@@ -41,40 +43,10 @@ class Downloader {
   final String userAgent;
   final bool Function()? cancelled;
 
-  static String? envProxy() {
-    final env = Platform.environment;
-    for (final key in [
-      'https_proxy',
-      'HTTPS_PROXY',
-      'all_proxy',
-      'ALL_PROXY',
-      'http_proxy',
-      'HTTP_PROXY',
-    ]) {
-      final value = env[key];
-      if (value == null || value.trim().isEmpty) continue;
-      if (value.startsWith('socks')) continue;
-      return value.trim();
-    }
-    return null;
-  }
+  static String? envProxy() => net.envProxy();
 
-  static bool _isLoopback(String host) =>
-      host == 'localhost' ||
-      host == '127.0.0.1' ||
-      host == '::1' ||
-      host == '[::1]';
-
-  String? _proxyDirective(Uri target) {
-    // Never funnel loopback traffic through a proxy.
-    if (_isLoopback(target.host)) return null;
-    final raw = (proxy == null || proxy!.trim().isEmpty) ? envProxy() : proxy;
-    if (raw == null) return null;
-    final uri = Uri.tryParse(raw.contains('://') ? raw : 'http://$raw');
-    if (uri == null || uri.host.isEmpty) return null;
-    final port = uri.hasPort ? uri.port : 80;
-    return 'PROXY ${uri.host}:$port';
-  }
+  String? _proxyDirective(Uri target) =>
+      net.envProxyDirective(target, explicit: proxy);
 
   /// Downloads [url] into [target], validating that the body is a mihomo
   /// configuration. Returns the number of bytes written.

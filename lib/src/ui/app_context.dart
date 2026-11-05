@@ -5,6 +5,7 @@ import '../model/profile.dart';
 import '../model/profile_info.dart';
 import '../model/settings.dart';
 import '../service/autostart.dart';
+import '../service/core_updater.dart';
 import '../service/mihomo_api.dart';
 import '../service/mihomo_core.dart';
 import '../service/paths.dart';
@@ -98,6 +99,18 @@ abstract class AppContext {
   AutostartState get autostartState;
 
   Future<void> toggleAutostart();
+
+  /// Downloads the newest mihomo release for this platform (via the selected
+  /// mirror) and installs it over the current binary.
+  Future<void> updateCore();
+
+  /// Reachability results per mirror id (may be empty / stale).
+  Map<String, MirrorProbe> get mirrorProbes;
+
+  bool isMirrorProbing(String id);
+
+  /// Opens the mirror picker and refreshes the connectivity results.
+  void showMirrorPicker();
 
   Future<void> exportData();
 

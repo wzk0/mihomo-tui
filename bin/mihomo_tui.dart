@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:mihomo_tui/src/model/profile_info.dart';
 import 'package:mihomo_tui/src/model/settings.dart';
+import 'package:mihomo_tui/src/service/core_updater.dart';
 import 'package:mihomo_tui/src/service/exporter.dart';
 import 'package:mihomo_tui/src/service/mihomo_api.dart';
 import 'package:mihomo_tui/src/service/paths.dart';
@@ -62,6 +63,11 @@ Future<void> main(List<String> arguments) async {
     exitCode = _printInfo(runtime, infoName);
     return;
   }
+  if (options.updateCore) {
+    exitCode = await _updateCore(runtime, options);
+    return;
+  }
+
   final exportPath = options.exportPath;
   if (exportPath != null) {
     runtime.repo.ensureLayout();
@@ -142,6 +148,9 @@ $appName $appVersion — $appDescription
       --stop            停止核心
       --restart         重启核心
       --selftest        运行内置自检
+      --update-core     从 GitHub 下载/更新 mihomo 内核（自动识别平台与架构）
+      --mirror <id>     配合 --update-core 选择下载镜像：
+                        direct / ghproxy / gh-proxy / akams
       --export [路径]   把设置与全部订阅配置打包成 zip（缺省写到主目录）
       --import-legacy <目录>
                         导入旧 clash_tui 的数据目录（含 data.json 与 config/）
@@ -166,6 +175,8 @@ class _CliOptions {
   String? info;
   String? importLegacy;
   String? exportPath;
+  bool updateCore = false;
+  String? mirror;
   String? binary;
   String? home;
   String? dataDir;
@@ -194,6 +205,15 @@ class _CliOptions {
           options.list = true;
         case '--selftest':
           options.selfTest = true;
+        case '--update-core':
+          options.updateCore = true;
+        case '--mirror':
+          options.mirror = nextValue(index);
+          if (options.mirror == null) {
+            options.error = '--mirror 需要一个镜像 id';
+          } else {
+            index++;
+          }
         case '--export':
           final value = nextValue(index);
           if (value != null && !value.startsWith('-')) {
@@ -493,6 +513,45 @@ rules:
       'info  tty · stdin=${stdin.hasTerminal} stdout=${stdout.hasTerminal}');
 
   return failures == 0 ? 0 : 1;
+}
+
+Future<int> _updateCore(Runtime runtime, _CliOptions options) async {
+  final mirror = mirrorById(options.mirror);
+  final updater = CoreUpdater(mirror: mirror);
+  final target = options.binary != null
+      ? File(options.binary!).absolute.path
+      : runtime.core.resolveBinary() ?? CoreUpdater.defaultInstallPath();
+  stdout.writeln('$appName $appVersion');
+  stdout.writeln('  平台/架构  ${CoreUpdater.platformLabel}');
+  stdout.writeln('  下载源     ${mirror.label}');
+  stdout.writeln('  目标路径   $target');
+  stdout.writeln('  当前版本   ${await runtime.core.version() ?? '未安装'}');
+  try {
+    stdout.write('  查询最新版本...');
+    final release = await updater.latest();
+    stdout.writeln(' ${release.tag}（${release.assetName}）');
+    var lastPercent = -1;
+    var progressOpen = false;
+    final result = await updater.install(
+      release,
+      targetPath: target,
+      onProgress: (received, total) {
+        if (total == null) return;
+        final percent = (received * 100 / total).floor();
+        if (percent < lastPercent + 10) return;
+        lastPercent = percent;
+        stdout.write(' $percent%');
+        progressOpen = percent < 100;
+        if (percent >= 100) stdout.writeln();
+      },
+    );
+    if (progressOpen) stdout.writeln();
+    stdout.writeln('完成：${result.path}（${result.version}）');
+    return 0;
+  } on CoreUpdateException catch (error) {
+    stderr.writeln('更新失败：${error.message}');
+    return 1;
+  }
 }
 
 String get _arch {

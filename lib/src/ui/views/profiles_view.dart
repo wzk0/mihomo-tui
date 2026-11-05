@@ -439,6 +439,7 @@ class ProfilesView extends View {
   void _rename(AppContext app, Profile profile) {
     app.showOverlay(
       FormOverlay(
+        onChanged: app.requestFrame,
         title: '重命名配置',
         fields: [
           FormFieldSpec(

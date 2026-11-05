@@ -1,9 +1,14 @@
 /// Modal overlays: confirmations, forms, help and scrollable text.
 library;
 
+import 'dart:async';
+import 'dart:math' as math;
+
 import '../term/keys.dart';
 import '../term/style.dart';
 import '../term/width.dart';
+import '../service/core_updater.dart';
+import '../util/clipboard.dart';
 import 'painter.dart';
 
 class KeyHint {
@@ -19,30 +24,66 @@ class TextInput {
 
   String _value;
   int _cursor = 0;
+  int? _anchor;
 
   String get value => _value;
   set value(String newValue) {
     _value = newValue;
     _cursor = _runes.length;
+    _anchor = null;
   }
 
   int get cursor => _cursor;
 
   List<int> get _runes => _value.runes.toList();
 
-  void insert(String text) {
+  bool get hasSelection => _anchor != null && _anchor != _cursor;
+
+  int get selectionStart =>
+      hasSelection ? math.min(_anchor!, _cursor) : _cursor;
+
+  int get selectionEnd => hasSelection ? math.max(_anchor!, _cursor) : _cursor;
+
+  String get selectedText => hasSelection
+      ? String.fromCharCodes(_runes.sublist(selectionStart, selectionEnd))
+      : '';
+
+  void selectAll() {
+    _anchor = 0;
+    _cursor = _runes.length;
+  }
+
+  void clearSelection() => _anchor = null;
+
+  void deleteSelection() {
+    if (!hasSelection) return;
     final runes = _runes;
-    final inserted = text.runes.toList();
-    final next = [
+    final start = selectionStart;
+    final end = selectionEnd;
+    _value = String.fromCharCodes([...runes.take(start), ...runes.skip(end)]);
+    _cursor = start;
+    _anchor = null;
+  }
+
+  void insert(String text) {
+    deleteSelection();
+    final runes = _runes;
+    final inserted = text.runes.where((r) => r >= 0x20).toList();
+    if (inserted.isEmpty) return;
+    _value = String.fromCharCodes([
       ...runes.take(_cursor),
-      ...inserted.where((r) => r >= 0x20),
+      ...inserted,
       ...runes.skip(_cursor),
-    ];
-    _value = String.fromCharCodes(next);
-    _cursor += inserted.where((r) => r >= 0x20).length;
+    ]);
+    _cursor += inserted.length;
+    _anchor = null;
   }
 
   void backspace() {
+    if (hasSelection) {
+      deleteSelection();
+      return;
+    }
     if (_cursor == 0) return;
     final runes = _runes..removeAt(_cursor - 1);
     _value = String.fromCharCodes(runes);
@@ -50,6 +91,10 @@ class TextInput {
   }
 
   void deleteWordBefore() {
+    if (hasSelection) {
+      deleteSelection();
+      return;
+    }
     final runes = _runes;
     var cursor = _cursor;
     while (cursor > 0 && runes[cursor - 1] == 0x20) {
@@ -66,28 +111,41 @@ class TextInput {
   }
 
   void deleteToEnd() {
-    final runes = _runes.take(_cursor).toList();
-    _value = String.fromCharCodes(runes);
+    if (hasSelection) {
+      deleteSelection();
+      return;
+    }
+    _value = String.fromCharCodes(_runes.take(_cursor));
   }
 
   void deleteForward() {
+    if (hasSelection) {
+      deleteSelection();
+      return;
+    }
     final runes = _runes;
     if (_cursor >= runes.length) return;
     runes.removeAt(_cursor);
     _value = String.fromCharCodes(runes);
   }
 
-  void moveLeft() {
-    if (_cursor > 0) _cursor--;
+  void moveLeft({bool extend = false}) => _moveTo(_cursor - 1, extend: extend);
+
+  void moveRight({bool extend = false}) => _moveTo(_cursor + 1, extend: extend);
+
+  void moveHome({bool extend = false}) => _moveTo(0, extend: extend);
+
+  void moveEnd({bool extend = false}) => _moveTo(_runes.length, extend: extend);
+
+  void _moveTo(int index, {bool extend = false}) {
+    final clamped = index.clamp(0, _runes.length);
+    if (extend) {
+      _anchor ??= _cursor;
+    } else {
+      _anchor = null;
+    }
+    _cursor = clamped;
   }
-
-  void moveRight() {
-    if (_cursor < _runes.length) _cursor++;
-  }
-
-  void moveHome() => _cursor = 0;
-
-  void moveEnd() => _cursor = _runes.length;
 
   void setCursorFromColumn(int column) {
     final runes = _runes;
@@ -96,11 +154,13 @@ class TextInput {
       final w = runeWidth(runes[i]);
       if (column < width + w) {
         _cursor = i;
+        _anchor = null;
         return;
       }
       width += w;
     }
     _cursor = runes.length;
+    _anchor = null;
   }
 
   /// Returns true when the key only affects the text buffer.
@@ -113,16 +173,16 @@ class TextInput {
         deleteForward();
         return true;
       case KeyKind.left:
-        moveLeft();
+        moveLeft(extend: event.shift);
         return true;
       case KeyKind.right:
-        moveRight();
+        moveRight(extend: event.shift);
         return true;
       case KeyKind.home:
-        moveHome();
+        moveHome(extend: event.shift);
         return true;
       case KeyKind.end:
-        moveEnd();
+        moveEnd(extend: event.shift);
         return true;
       case KeyKind.char:
         if (event.ctrl || event.alt) return false;
@@ -318,6 +378,7 @@ class FormOverlay extends Overlay {
     required this.onSubmit,
     this.submitLabel = '确定',
     this.description = const [],
+    this.onChanged,
   });
 
   @override
@@ -326,6 +387,9 @@ class FormOverlay extends Overlay {
   final void Function(Map<String, String> values) onSubmit;
   final String submitLabel;
   final List<String> description;
+
+  /// Called after any edit/selection change so the host can repaint.
+  final void Function()? onChanged;
 
   int _focused = 0;
   String? _error;
@@ -418,6 +482,28 @@ class FormOverlay extends Overlay {
           (cursorColumns - visibleWidth + 1).clamp(0, maxOffset).toInt();
       final shown = _slice(display, offset, visibleWidth);
       painter.text(fieldRect.x + 1, y, shown, Style(fg: theme.text));
+      if (field.input.hasSelection) {
+        final selStart = textWidth(
+          String.fromCharCodes(
+            field.input.value.runes.take(field.input.selectionStart),
+          ),
+        );
+        final selEnd = textWidth(
+          String.fromCharCodes(
+            field.input.value.runes.take(field.input.selectionEnd),
+          ),
+        );
+        final from = math.max(selStart, offset);
+        final to = math.min(selEnd, offset + visibleWidth);
+        if (from < to) {
+          painter.text(
+            fieldRect.x + 1 + (from - offset),
+            y,
+            _slice(display, from, to - from),
+            Style(reverse: true),
+          );
+        }
+      }
       final empty = field.input.value.isEmpty;
       if (empty && field.hint.isNotEmpty) {
         painter.text(fieldRect.x + 1, y, truncate(field.hint, visibleWidth),
@@ -573,31 +659,77 @@ class FormOverlay extends Overlay {
       _submit();
       return true;
     }
-    if (event.isCtrl('u')) {
-      field.input.value = '';
+    if (event.isCtrl('a')) {
+      field.input.selectAll();
+      onChanged?.call();
       return true;
     }
-    if (event.isCtrl('a')) {
-      field.input.moveHome();
+    if (event.isCtrl('c')) {
+      _copySelection(field.input);
+      return true;
+    }
+    if (event.isCtrl('x')) {
+      _cutSelection(field.input);
+      return true;
+    }
+    if (event.isCtrl('v')) {
+      _pasteClipboard(field.input);
+      return true;
+    }
+    if (event.isCtrl('u')) {
+      field.input.value = '';
+      onChanged?.call();
       return true;
     }
     if (event.isCtrl('e')) {
       field.input.moveEnd();
+      onChanged?.call();
       return true;
     }
     if (event.isCtrl('w')) {
       field.input.deleteWordBefore();
+      onChanged?.call();
       return true;
     }
     if (event.isCtrl('k')) {
       field.input.deleteToEnd();
+      onChanged?.call();
       return true;
     }
     if (field.input.handleKey(event)) {
       _error = null;
+      onChanged?.call();
       return true;
     }
     return true;
+  }
+
+  /// Ctrl+C: copies the selection, or the whole value when nothing is selected.
+  void _copySelection(TextInput input) {
+    final text = input.hasSelection ? input.selectedText : input.value;
+    if (text.isEmpty) return;
+    unawaited(Clipboard.write(text));
+  }
+
+  void _cutSelection(TextInput input) {
+    if (!input.hasSelection) return;
+    unawaited(Clipboard.write(input.selectedText));
+    input.deleteSelection();
+    onChanged?.call();
+  }
+
+  void _pasteClipboard(TextInput input) {
+    unawaited(Clipboard.read().then((text) {
+      if (text == null || text.isEmpty) return;
+      // Single line fields: turn newlines/tabs into spaces.
+      final cleaned = text
+          .replaceAll('\r\n', '\n')
+          .replaceAll(RegExp(r'[\r\n\t]'), ' ')
+          .trimRight();
+      if (cleaned.isEmpty) return;
+      input.insert(cleaned);
+      onChanged?.call();
+    }));
   }
 
   @override
@@ -793,6 +925,150 @@ class HelpOverlay extends Overlay {
   @override
   bool handleMouse(MouseEvent event) {
     if (event.kind == MouseKind.press && event.button == MouseButton.left) {
+      dismiss();
+      return true;
+    }
+    return false;
+  }
+}
+
+/// Mirror picker with reachability results.
+class MirrorOverlay extends Overlay {
+  MirrorOverlay({
+    required this.current,
+    required this.probes,
+    required this.probing,
+    required this.onSelect,
+    required this.onRefresh,
+  });
+
+  final String current;
+  final Map<String, MirrorProbe> probes;
+  final bool Function(String id) probing;
+  final void Function(String id) onSelect;
+  final void Function() onRefresh;
+
+  int _selected = 0;
+
+  @override
+  String get title => '下载镜像';
+
+  @override
+  void draw(Painter painter) {
+    final theme = painter.theme;
+    final width = 62;
+    final height = coreMirrors.length + 6;
+    final rect = centeredRect(painter.width, painter.height, width, height);
+    painter.fill(rect, Style(bg: theme.panelAlt));
+
+    var y = rect.y + 1;
+    painter.text(
+      rect.x + 3,
+      y++,
+      '选择更新内核时使用的下载源',
+      Style(fg: theme.muted),
+    );
+    y++;
+    for (var index = 0; index < coreMirrors.length; index++) {
+      final mirror = coreMirrors[index];
+      final selected = index == _selected;
+      final rowRect = Rect(rect.x + 2, y + index, rect.width - 4, 1);
+      final style = selected
+          ? theme.selectionStyle()
+          : Style(fg: theme.text, bg: theme.panelAlt);
+      painter.text(
+        rowRect.x,
+        rowRect.y,
+        selected ? '>' : ' ',
+        Style(fg: theme.accent, bg: theme.panelAlt),
+      );
+      painter.text(
+        rowRect.x + 2,
+        rowRect.y,
+        padRight(mirror.label, 22),
+        Style(
+          fg: mirror.id == current ? theme.green : style.fg,
+          bg: theme.panelAlt,
+          bold: mirror.id == current || selected,
+        ),
+      );
+      final probe = probes[mirror.id];
+      final status = probing(mirror.id)
+          ? '检测中~'
+          : probe == null
+              ? '未检测'
+              : probe.label;
+      final color = probing(mirror.id)
+          ? theme.yellow
+          : probe == null
+              ? theme.muted
+              : probe.available
+                  ? theme.green
+                  : theme.red;
+      painter.text(
+        rowRect.x + 26,
+        rowRect.y,
+        truncate(status, rowRect.width - 28),
+        Style(fg: color, bg: theme.panelAlt),
+      );
+      painter.hit(
+        rowRect,
+        id: 'mirror${mirror.id}',
+        onHover: () => _selected = index,
+        onPress: () {
+          _selected = index;
+          onSelect(mirror.id);
+          dismiss();
+        },
+      );
+    }
+    final footerY = rect.bottom - 2;
+    painter.text(
+      rect.x + 3,
+      footerY,
+      'Enter 选择 | r 重新检测 | Esc 关闭',
+      Style(fg: theme.muted),
+    );
+    // Blue accent for "github.com" hint line.
+    painter.text(
+      rect.x + 3,
+      rect.bottom - 3,
+      truncate('镜像只影响内核下载，不会改动订阅下载代理', rect.width - 6),
+      Style(fg: theme.muted, dim: true),
+    );
+    painter.drawBox(rect, focused: true, title: title);
+  }
+
+  @override
+  bool handleKey(KeyEvent event) {
+    if (event.kind == KeyKind.escape || event.isChar('q')) {
+      dismiss();
+      return true;
+    }
+    if (event.kind == KeyKind.up || event.isChar('k')) {
+      _selected = (_selected - 1 + coreMirrors.length) % coreMirrors.length;
+      return true;
+    }
+    if (event.kind == KeyKind.down || event.isChar('j')) {
+      _selected = (_selected + 1) % coreMirrors.length;
+      return true;
+    }
+    if (event.isChar('r')) {
+      onRefresh();
+      return true;
+    }
+    if (event.kind == KeyKind.enter) {
+      onSelect(coreMirrors[_selected].id);
+      dismiss();
+      return true;
+    }
+    return true;
+  }
+
+  @override
+  bool handleMouse(MouseEvent event) {
+    if (event.kind == MouseKind.press && event.button == MouseButton.left) {
+      // Rows are hit-testable; clicks outside the dialog close it.
       dismiss();
       return true;
     }

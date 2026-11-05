@@ -170,6 +170,7 @@ class PosixTerminal implements TerminalBackend {
     } catch (_) {
       // stdin is not a terminal; keep going with whatever we get.
     }
+    unawaited(_setSignalKeys(false));
     _querySize();
     stdout.write(
       '\x1b[?1049h'
@@ -213,6 +214,7 @@ class PosixTerminal implements TerminalBackend {
     _started = false;
     _escapeTimer?.cancel();
     _escapeTimer = null;
+    unawaited(_setSignalKeys(true));
     _subscription?.cancel();
     _subscription = null;
     _resizeSub?.cancel();
@@ -250,6 +252,7 @@ class PosixTerminal implements TerminalBackend {
       stdin.echoMode = _originalEchoMode;
       stdin.lineMode = _originalLineMode;
     } catch (_) {}
+    unawaited(_setSignalKeys(true));
     stdout.flush();
   }
 
@@ -261,6 +264,7 @@ class PosixTerminal implements TerminalBackend {
       stdin.echoMode = false;
       stdin.lineMode = false;
     } catch (_) {}
+    unawaited(_setSignalKeys(false));
     _querySize();
     _safeWrite(
       '\x1b[?1049h'
@@ -277,6 +281,24 @@ class PosixTerminal implements TerminalBackend {
       stdout.write(data);
     } catch (_) {
       // The terminal may already be gone (e.g. SIGHUP while closing).
+    }
+  }
+
+  /// Ctrl+C must reach the app as a key (copy inside text fields), so the
+  /// terminal's ISIG flag is cleared while the TUI owns the tty.
+  ///
+  /// `stty` is run through `sh` with its own stdin redirected from /dev/tty:
+  /// after the stdin subscription is cancelled our fd 0 may no longer be
+  /// usable, and we never want stty's diagnostics on screen.
+  Future<void> _setSignalKeys(bool enabled) async {
+    final flag = enabled ? 'isig' : '-isig';
+    try {
+      await Process.run(
+        'sh',
+        ['-c', 'stty $flag < /dev/tty 2>/dev/null'],
+      ).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // stty (or /dev/tty) unavailable: Ctrl+C keeps sending SIGINT.
     }
   }
 

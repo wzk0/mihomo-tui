@@ -2,13 +2,13 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import '../model/profile.dart';
 import '../model/profile_info.dart';
 import '../model/settings.dart';
 import '../service/autostart.dart';
+import '../service/core_updater.dart';
 import '../service/exporter.dart';
 import '../service/mihomo_api.dart';
 import '../service/mihomo_core.dart';
@@ -21,6 +21,7 @@ import '../term/screen.dart';
 import '../term/style.dart';
 import '../term/terminal.dart';
 import '../term/width.dart';
+import '../util/clipboard.dart';
 import '../util/format.dart';
 import '../util/shell.dart';
 import '../version.dart';
@@ -126,6 +127,11 @@ class App implements AppContext {
   DateTime? _coreStartedAt;
   AutostartState _autostartState = AutostartState.unknown;
   DateTime _autostartChecked = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, MirrorProbe> _mirrorProbes = {};
+  final Set<String> _mirrorProbing = {};
+  CoreRelease? _releaseCache;
+  DateTime _releaseCachedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _mirrorProbedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   MihomoApi? _api;
   String? _apiKey;
@@ -712,6 +718,9 @@ class App implements AppContext {
           KeyHint('上下 / 滚轮', '移动或滚动'),
           KeyHint('Enter', '确认 / 执行'),
           KeyHint('Esc', '取消 / 返回'),
+          KeyHint('Ctrl+C / V', '文本框中复制 / 粘贴'),
+          KeyHint('Ctrl+A / X', '全选 / 剪切'),
+          KeyHint('Shift+方向键', '在文本框中选中文本'),
         ],
       ),
       ('当前页面 | ${view.label}', view.hints(this)),
@@ -885,6 +894,130 @@ class App implements AppContext {
       return;
     }
     _autostartState = await autostart.state();
+  }
+
+  @override
+  Future<void> updateCore() async {
+    final updater = CoreUpdater(
+      mirror: mirrorById(_settings.mirror),
+      proxy: _settings.downloadProxy,
+    );
+    final target = core.resolveBinary() ?? CoreUpdater.defaultInstallPath();
+    confirm(
+      title: '更新 mihomo 内核',
+      message: '从 GitHub 获取最新版本并替换内核文件。',
+      detail: [
+        '平台/架构：${CoreUpdater.platformLabel}',
+        '下载源：${updater.mirror.label}',
+        '目标路径：$target',
+        '原文件会备份为 .bak',
+      ],
+      confirmLabel: '下载并安装',
+      onConfirm: () => unawaited(_runCoreUpdate(updater, target)),
+    );
+  }
+
+  Future<void> _runCoreUpdate(CoreUpdater updater, String target) async {
+    final before = _coreStatus?.version;
+    await _runBusy('更新内核', () async {
+      try {
+        _busyLabel = '获取最新版本~';
+        _dirty = true;
+        final release = await updater.latest();
+        _busyLabel = '下载 ${release.assetName}';
+        _dirty = true;
+        final result = await updater.install(
+          release,
+          targetPath: target,
+          onProgress: (received, total) {
+            _busyLabel = total == null
+                ? '下载 ${formatBytes(received)}'
+                : '下载 ${formatBytes(received)} / ${formatBytes(total)}';
+            _dirty = true;
+          },
+        );
+        await _refreshServices();
+        toast(
+          '内核已更新：${before ?? '未安装'} -> ${result.version}',
+          level: ToastLevel.success,
+        );
+        if (_coreStatus?.running == true) {
+          confirm(
+            title: '重启核心',
+            message: '内核已更新，是否重启 mihomo 使其生效？',
+            confirmLabel: '重启',
+            onConfirm: () => unawaited(restartCore()),
+          );
+        }
+      } on CoreUpdateException catch (error) {
+        toast('更新失败：${error.message}', level: ToastLevel.error);
+      } catch (error) {
+        toast('更新失败：$error', level: ToastLevel.error);
+      }
+    });
+  }
+
+  @override
+  Map<String, MirrorProbe> get mirrorProbes => _mirrorProbes;
+
+  @override
+  bool isMirrorProbing(String id) => _mirrorProbing.contains(id);
+
+  @override
+  void showMirrorPicker() {
+    showOverlay(MirrorOverlay(
+      current: _settings.mirror ?? 'direct',
+      probes: _mirrorProbes,
+      probing: isMirrorProbing,
+      onSelect: (id) {
+        unawaited(applySettings(_settings.copyWith(mirror: id)));
+        toast('下载镜像：${mirrorById(id).label}', level: ToastLevel.success);
+      },
+      onRefresh: () => unawaited(_probeMirrors(force: true)),
+    ));
+    unawaited(_probeMirrors());
+  }
+
+  Future<void> _probeMirrors({bool force = false}) async {
+    if (_mirrorProbing.isNotEmpty) return;
+    if (!force &&
+        _mirrorProbes.isNotEmpty &&
+        DateTime.now().difference(_mirrorProbedAt) <
+            const Duration(minutes: 5)) {
+      return;
+    }
+    final updater = CoreUpdater(mirror: mirrorById(_settings.mirror));
+    var release = _releaseCache;
+    if (release == null ||
+        DateTime.now().difference(_releaseCachedAt) >
+            const Duration(minutes: 10)) {
+      try {
+        release = await updater.latest();
+        _releaseCache = release;
+        _releaseCachedAt = DateTime.now();
+      } on CoreUpdateException catch (error) {
+        for (final mirror in coreMirrors) {
+          _mirrorProbes[mirror.id] = MirrorProbe.unavailable(error.message);
+        }
+        _mirrorProbedAt = DateTime.now();
+        _dirty = true;
+        return;
+      }
+    }
+    final target = release;
+    _mirrorProbedAt = DateTime.now();
+    await Future.wait(coreMirrors.map((mirror) async {
+      _mirrorProbing.add(mirror.id);
+      _dirty = true;
+      final probe = await CoreUpdater.probe(
+        mirror,
+        target,
+        proxy: _settings.downloadProxy,
+      );
+      _mirrorProbes[mirror.id] = probe;
+      _mirrorProbing.remove(mirror.id);
+      _dirty = true;
+    }));
   }
 
   @override
@@ -1235,6 +1368,7 @@ class App implements AppContext {
   @override
   Future<void> addProfileInteractive() async {
     showOverlay(FormOverlay(
+      onChanged: requestFrame,
       title: '添加订阅',
       description: const [
         '填入 mihomo 订阅地址；下载后会校验 YAML 与节点数量。',
@@ -1391,6 +1525,7 @@ class App implements AppContext {
   @override
   Future<void> editProfileMeta(Profile profile) async {
     showOverlay(FormOverlay(
+      onChanged: requestFrame,
       title: '编辑订阅信息',
       description: const ['只修改名称与订阅地址，不会改动已下载的配置文件。'],
       fields: [
@@ -1504,34 +1639,9 @@ class App implements AppContext {
 
   @override
   bool copyToClipboard(String text) {
-    final candidates = <List<String>>[
-      if (Platform.isMacOS) ['pbcopy'],
-      if (Platform.isWindows) ['clip'],
-      if (!Platform.isMacOS && !Platform.isWindows) ...[
-        ['wl-copy'],
-        ['xclip', '-selection', 'clipboard'],
-        ['xsel', '--clipboard', '--input'],
-      ],
-    ];
-    for (final command in candidates) {
-      if (!AppPaths.canRun(command.first)) continue;
-      unawaited(_pipeTo(command, text));
-      return true;
-    }
-    return false;
-  }
-
-  Future<void> _pipeTo(List<String> command, String text) async {
-    try {
-      final process =
-          await Process.start(command.first, command.skip(1).toList());
-      process.stdin.add(utf8.encode(text));
-      await process.stdin.flush();
-      await process.stdin.close();
-      await process.exitCode;
-    } catch (error) {
-      toast('复制失败：$error', level: ToastLevel.error);
-    }
+    if (!Clipboard.canWrite) return false;
+    unawaited(Clipboard.write(text));
+    return true;
   }
 
   @override

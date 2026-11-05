@@ -12,6 +12,7 @@ class Settings {
     this.downloadProxy,
     this.accent,
     this.colorMode,
+    this.mirror,
   });
 
   final String? mihomoBin;
@@ -27,6 +28,9 @@ class Settings {
   /// `auto`, `dark` or `light`.
   final String? colorMode;
 
+  /// Download mirror id for core updates (see `coreMirrors`).
+  final String? mirror;
+
   Settings copyWith({
     String? mihomoBin,
     String? mihomoHome,
@@ -34,6 +38,7 @@ class Settings {
     String? downloadProxy,
     String? accent,
     String? colorMode,
+    String? mirror,
     bool clearMihomoBin = false,
     bool clearMihomoHome = false,
     bool clearEditor = false,
@@ -49,6 +54,7 @@ class Settings {
           clearDownloadProxy ? null : (downloadProxy ?? this.downloadProxy),
       accent: clearAccent ? null : (accent ?? this.accent),
       colorMode: clearColorMode ? null : (colorMode ?? this.colorMode),
+      mirror: mirror ?? this.mirror,
     );
   }
 
@@ -59,6 +65,7 @@ class Settings {
         'downloadProxy': downloadProxy,
         'accent': accent,
         'colorMode': colorMode,
+        'mirror': mirror,
       };
 
   static Settings fromJson(Map<String, Object?> json) {
@@ -75,6 +82,7 @@ class Settings {
       downloadProxy: read('downloadProxy'),
       accent: read('accent'),
       colorMode: read('colorMode'),
+      mirror: read('mirror'),
     );
   }
 

@@ -5,7 +5,7 @@
 原 [clash_tui](https://github.com/wzk0/clash_tui) 的 Dart 重写版：内核换成 mihomo，界面重做成带侧栏的 TUI，并接入了 mihomo 的 RESTful 控制器。
 
 ```
- mihomo-tui v1.0                                                              运行中 v1.19.33
+ mihomo-tui v1.1                                                              运行中 v1.19.33
  ╭─ 导航 ───────────────╮ ╭─ 核心状态 ────────────────────────────────────────────────────────╮
  │> 概览              1 │ │ 二进制     /home/me/bin/mihomo                                    │
  │  订阅              2 │ │ 版本       v1.19.33                                               │
@@ -36,9 +36,11 @@
 ## ✨ 特性
 
 - 📦 **订阅**：添加、更新、全部更新、重命名、删除、一键启用（自动备份 `config.yaml.bak`）；`e` 改订阅信息，`E` 改配置文件
+- 🧩 **内核**：从 GitHub 官方一键下载/更新 mihomo，自动识别系统与架构；支持 ghproxy / gh-proxy / akams 镜像并显示连通性
 - ⚙️ **核心**：自动探测 mihomo、后台启动（关掉 TUI 也不停）、停止、重启、热重载、日志查看
 - 📊 **面板**：模式切换、当前节点、连接与流量、代理组/节点切换、单点/整组测速、延迟排序
 - 🖱️ **交互**：鼠标点击、滚轮、双击启用；`>` 光标 + 加粗；`Tab` 切栏、`1-5` 跳页、`?` 帮助
+- ⌨️ **文本编辑**：输入框支持 `Ctrl+A/C/V/X`、`Shift+方向键` 选中、长文本横向滚动
 - 🎨 **外观**：跟随终端深浅色，6 种强调色，不画背景色块，只显示终端自己的背景
 - 🚀 **顺手事**：一键开关系统代理、一键开机自启（systemd 用户服务 / Windows 启动项）、复制代理环境变量
 - 💾 **备份**：把设置、订阅索引和全部配置打包成 zip
@@ -70,11 +72,13 @@ dart compile exe bin/mihomo_tui.dart -o build/mihomo-tui   # Windows 用 -o buil
 
 ## 🔌 内核
 
-程序不内置内核，需要自己准备 mihomo 二进制。查找顺序：
+程序不内置内核，可以自己准备，也可以让程序帮你下载。
 
-`--bin` → 设置页 → `MIHOMO_BIN` → 程序目录 → `mihomo/`、`core/` 子目录 → `PATH` 与常见路径。
+- 🧩 设置页「更新内核」：从 GitHub 官方获取最新版，自动识别平台与架构（`linux-amd64`、`linux-arm64`、`linux-armv7`、`windows-amd64`、`windows-arm64`），旧文件备份为 `.bak`
+- 🪞 「下载镜像」里可选直连或 ghproxy / gh-proxy / akams，并显示每个镜像的连通性检测结果
+- 命令行：`mihomo-tui --update-core --mirror gh-proxy`
 
-显式指定但文件不存在时会直接报错，不会悄悄换用别的内核。
+查找顺序：`--bin` → 设置页 → `MIHOMO_BIN` → 程序目录 → `mihomo/`、`core/` 子目录 → `PATH` 与常见路径。显式指定但文件不存在时会直接报错，不会悄悄换用别的内核。
 
 ## 🚀 使用
 
@@ -103,7 +107,7 @@ mihomo-tui
 | 日志 | `s` `f` `r` `c` `g` `G` | 密度（标准/精简/极简）/ 跟随 / 刷新 / 清空 / 首尾 |
 | 设置 | `Enter` `d` `i` | 编辑或切换 / 重新检测核心 / 关于 |
 
-弹窗内：`Tab` 换字段、`Enter` 提交、`Esc` 取消、`Ctrl+A/E/U/W/K` 行编辑。
+弹窗内：`Tab` 换字段、`Enter` 提交、`Esc` 取消；`Ctrl+A/X/C/V` 全选/剪切/复制/粘贴，`Shift+方向键` 选中，`Ctrl+U/K/W/E` 行编辑。
 
 ## 📁 文件与目录
 
@@ -157,7 +161,7 @@ mihomo-tui --import-legacy ./我的配置
 - 发布：推送 `v*` 标签自动构建并发 Release
 
 ```sh
-git tag v1.0 && git push origin v1.0
+git tag v1.1 && git push origin v1.1
 ```
 
 ## ⚠️ 已知限制
@@ -169,4 +173,4 @@ git tag v1.0 && git push origin v1.0
 
 ## 🙏 致谢
 
-思路来自 [wzk0/clash_tui](https://github.com/wzk0/clash_tui)，内核为 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)。
+内核为 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)。

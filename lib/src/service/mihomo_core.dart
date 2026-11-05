@@ -116,6 +116,14 @@ class MihomoCore {
         locations.add('$dir${Platform.pathSeparator}$name');
       }
     }
+    if (Platform.isWindows) {
+      final localAppData = Platform.environment['LOCALAPPDATA'];
+      if (localAppData != null && localAppData.isNotEmpty) {
+        for (final name in _binaryNames) {
+          locations.add('$localAppData\\mihomo-tui\\$name');
+        }
+      }
+    }
     for (final dir in [
       '${AppPaths.homeDir}${Platform.pathSeparator}.local${Platform.pathSeparator}bin',
       if (!Platform.isWindows) '/usr/local/bin',
