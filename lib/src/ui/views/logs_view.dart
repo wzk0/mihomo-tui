@@ -1,4 +1,4 @@
-/// Core log viewer with level colouring, three density modes and follow.
+/// Core log viewer: level colouring, two densities, hover + detail popup.
 library;
 
 import 'dart:async';
@@ -8,6 +8,7 @@ import '../../term/style.dart';
 import '../../term/width.dart';
 import '../../util/log_entry.dart';
 import '../app_context.dart';
+import '../list_state.dart';
 import '../overlay.dart';
 import '../painter.dart';
 import '../theme.dart';
@@ -19,10 +20,7 @@ enum LogMode {
   standard('标准'),
 
   /// `LEVEL message`
-  compact('精简'),
-
-  /// `message` only, debug/trace entries hidden.
-  minimal('极简');
+  compact('精简');
 
   const LogMode(this.label);
 
@@ -33,9 +31,8 @@ enum LogMode {
 
 class LogsView extends View {
   List<LogEntry> _entries = const [];
-  List<LogEntry> _visible = const [];
   LogMode _mode = LogMode.standard;
-  int _scroll = 0;
+  final ListState _list = ListState();
   bool _follow = true;
   DateTime _lastLoad = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -49,6 +46,7 @@ class LogsView extends View {
   List<KeyHint> hints(AppContext app) => [
         KeyHint('s', '视图：${_mode.label}'),
         KeyHint('f', _follow ? '停止跟随' : '跟随'),
+        KeyHint('Enter', '详情'),
         KeyHint('r', '刷新'),
         KeyHint('c', '清空'),
       ];
@@ -63,8 +61,7 @@ class LogsView extends View {
     final raw = app.core.readLogTail(lines: 800);
     if (!_sameEntries(raw)) {
       _entries = raw.map(LogEntry.parse).toList(growable: false);
-      _rebuildVisible();
-      if (_follow) _scroll = _visible.length;
+      if (_follow) _list.selected = _entries.isEmpty ? 0 : _entries.length - 1;
       app.requestFrame();
     }
   }
@@ -75,14 +72,6 @@ class LogsView extends View {
     return raw.last == _entries.last.raw && raw.first == _entries.first.raw;
   }
 
-  void _rebuildVisible() {
-    _visible = _mode == LogMode.minimal
-        ? _entries
-            .where((entry) => entry.level != 'debug' && entry.level != 'trace')
-            .toList(growable: false)
-        : _entries;
-  }
-
   @override
   void draw(
     AppContext app,
@@ -91,65 +80,107 @@ class LogsView extends View {
     required bool focused,
   }) {
     final theme = app.theme;
-    final rect = Rect(area.x, area.y, area.width, area.height);
     final status = _follow ? '跟随中' : '已暂停';
-    final inner = Rect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
-    if (_visible.isEmpty) {
+    final inner = Rect(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+    if (_entries.isEmpty) {
       final hints = app.core.hasLogFile
           ? ['日志文件为空，启动核心后会有输出。']
           : [
               '还没有日志文件：${app.paths.logFile}',
-              '启动一次核心（概览 右 s）即可生成。',
+              '启动一次核心（概览 -> s）即可生成。',
             ];
       var y = inner.y;
       for (final line in hints) {
-        painter.text(inner.x, y++, truncate(line, inner.width),
-            Style(fg: theme.muted, bg: theme.panel));
+        painter.text(
+          inner.x,
+          y++,
+          truncate(line, inner.width),
+          Style(fg: theme.muted, bg: theme.panel),
+        );
       }
       painter.drawBox(
-        rect,
+        area,
         focused: focused,
         title: '${app.paths.logFile} | ${_mode.label} | $status',
       );
       return;
     }
 
-    final total = _visible.length;
-    final visible = inner.height;
-    final maxScroll = total > visible ? total - visible : 0;
-    if (_follow) _scroll = maxScroll;
-    if (_scroll > maxScroll) _scroll = maxScroll;
-    if (_scroll < 0) _scroll = 0;
-
-    for (var row = 0; row < visible; row++) {
-      final index = _scroll + row;
-      if (index >= total) break;
-      _drawEntry(painter, theme, _visible[index], inner, row);
+    // While following, the cursor column is hidden (the view is a live tail).
+    final showCursor = !_follow;
+    final textOffset = showCursor ? 2 : 0;
+    final total = _entries.length;
+    final rows = inner.height;
+    _list.bind(total: total, visible: rows);
+    if (_follow) {
+      _list.selected = total - 1;
+      _list.ensureVisible();
+    } else {
+      _list.ensureVisible();
     }
 
-    painter.hit(inner, id: 'logs', onWheel: (delta) {
-      _follow = false;
-      _scroll += delta * 3;
-    });
+    final visible = total < rows ? total : rows;
+    for (var row = 0; row < visible; row++) {
+      final index = _list.scroll + row;
+      if (index >= total) break;
+      final entry = _entries[index];
+      final selected = index == _list.selected;
+      final y = inner.y + row;
+      final rowRect = Rect(inner.x, y, inner.width, 1);
+      if (selected) {
+        painter.text(
+          inner.x,
+          y,
+          showCursor ? '>' : ' ',
+          Style(fg: theme.accent, bg: theme.panel, bold: true),
+        );
+      }
+      _drawEntry(
+        painter,
+        theme,
+        entry,
+        inner.x + textOffset,
+        y,
+        inner.right - (inner.x + textOffset),
+        bold: selected,
+      );
+      painter.hit(
+        rowRect,
+        id: 'log$index',
+        onHover: () => _list.select(index),
+        onPress: () => _showDetail(app, index),
+        onWheel: (delta) {
+          _follow = false;
+          _list.wheel(delta);
+        },
+      );
+    }
 
-    // Borders are painted last so content can never punch a hole in them.
+    painter.text(
+      inner.x,
+      inner.y,
+      '',
+      Style(bg: theme.panel),
+    );
+
+    // Scrollbar drawn on the border column, colour only.
+    final maxScroll = total > rows ? total - rows : 0;
     painter.drawBox(
-      rect,
+      area,
       focused: focused,
       title: '${app.paths.logFile} | ${_mode.label} | $status',
     );
-
-    // The scrollbar lives on the border column itself (colour only), which
-    // keeps a single clean vertical line.
-    if (maxScroll > 0 && inner.height > 2) {
-      final barHeight = ((visible / total) * visible).round().clamp(1, visible);
-      final barTop = ((_scroll / maxScroll) * (visible - barHeight)).round();
-      for (var row = 0; row < visible; row++) {
-        final inBar = row >= barTop && row < barTop + barHeight;
-        if (!inBar) continue;
+    if (maxScroll > 0 && rows > 2) {
+      final barHeight = ((rows / total) * rows).round().clamp(1, rows);
+      final barTop =
+          ((_list.scroll / maxScroll) * (rows - barHeight)).round().clamp(
+                0,
+                rows - barHeight,
+              );
+      for (var i = 0; i < barHeight; i++) {
         painter.text(
-          rect.right - 1,
-          inner.y + row,
+          area.right - 1,
+          inner.y + barTop + i,
           '│',
           Style(fg: theme.accent, bold: true),
         );
@@ -161,50 +192,42 @@ class LogsView extends View {
     Painter painter,
     Theme theme,
     LogEntry entry,
-    Rect inner,
-    int row,
-  ) {
-    final y = inner.y + row;
+    int x,
+    int y,
+    int width, {
+    required bool bold,
+  }) {
+    if (width <= 0) return;
     final levelColor = _levelColor(theme, entry.level);
-    final background = Style(bg: theme.panel);
-    var x = inner.x;
+    var cursor = x;
     if (_mode == LogMode.standard && entry.time != null) {
-      x += painter.text(
-        x,
+      cursor += painter.text(
+        cursor,
         y,
         '${entry.time!} ',
         Style(fg: theme.muted, bg: theme.panel),
       );
     }
-    if (_mode == LogMode.minimal) {
-      // Only the message survives; the level is conveyed by colour.
-      painter.text(
-        x,
-        y,
-        truncate(entry.message, inner.right - x - 1),
-        Style(fg: levelColor == theme.accent ? theme.text : levelColor),
-      );
-      return;
-    }
-    x += painter.text(
-      x,
+    cursor += painter.text(
+      cursor,
       y,
       '${entry.tag} ',
       Style(fg: levelColor, bg: theme.panel, bold: true),
     );
-    // Leave one column before the border so a trailing wide glyph can never
-    // touch (and visually eat) the frame line.
-    final remaining = inner.right - x - 1;
-    if (remaining > 0) {
-      painter.text(
-        x,
-        y,
-        truncate(entry.message, remaining),
-        background.copyWith(
-          fg: entry.level == 'error' ? theme.red : theme.text,
-        ),
-      );
-    }
+    final remaining = width - (cursor - x);
+    if (remaining <= 1) return;
+    final messageColor = switch (entry.level) {
+      'error' || 'fatal' => theme.red,
+      'warning' || 'warn' => theme.yellow,
+      'debug' || 'trace' => theme.muted,
+      _ => theme.text,
+    };
+    painter.text(
+      cursor,
+      y,
+      truncate(entry.message, remaining - 1),
+      Style(fg: messageColor, bg: theme.panel, bold: bold),
+    );
   }
 
   int _levelColor(Theme theme, String level) => switch (level) {
@@ -214,45 +237,66 @@ class LogsView extends View {
         _ => theme.accent,
       };
 
+  void _showDetail(AppContext app, int index) {
+    if (index < 0 || index >= _entries.length) return;
+    final entry = _entries[index];
+    app.showOverlay(InfoOverlay(
+      title: '日志详情',
+      lines: [
+        '时间    ${entry.time ?? '-'}',
+        '级别    ${entry.level}',
+        '',
+        '内容',
+        ...wrapText(entry.message, 78),
+        '',
+        '原始行',
+        ...wrapText(entry.raw, 78),
+      ],
+    ));
+  }
+
   @override
   bool onKey(AppContext app, KeyEvent event) {
     if (event.kind == KeyKind.down || event.isChar('j')) {
       _follow = false;
-      _scroll++;
+      _list.moveBy(1);
       return true;
     }
     if (event.kind == KeyKind.up || event.isChar('k')) {
       _follow = false;
-      _scroll--;
+      _list.moveBy(-1);
       return true;
     }
     if (event.kind == KeyKind.pageUp) {
       _follow = false;
-      _scroll -= 15;
+      _list.wheel(-15);
       return true;
     }
     if (event.kind == KeyKind.pageDown) {
       _follow = false;
-      _scroll += 15;
+      _list.wheel(15);
       return true;
     }
     if (event.kind == KeyKind.home || event.isCharExact('g')) {
       _follow = false;
-      _scroll = 0;
+      _list.select(0);
       return true;
     }
     if (event.kind == KeyKind.end || event.isCharExact('G')) {
       _follow = true;
       return true;
     }
+    if (event.kind == KeyKind.enter) {
+      _showDetail(app, _list.selected);
+      return true;
+    }
     if (event.isChar('f')) {
       _follow = !_follow;
+      if (_follow) _list.select(_entries.isEmpty ? 0 : _entries.length - 1);
       return true;
     }
     if (event.isChar('s')) {
       _mode = _mode.next;
-      _rebuildVisible();
-      if (_follow) _scroll = _visible.length;
       return true;
     }
     if (event.isChar('r')) {
@@ -268,7 +312,6 @@ class LogsView extends View {
         onConfirm: () {
           app.core.clearLog();
           _entries = const [];
-          _visible = const [];
           app.toast('日志已清空', level: ToastLevel.success);
         },
       );
@@ -280,7 +323,7 @@ class LogsView extends View {
   @override
   bool onWheel(AppContext app, int delta) {
     _follow = false;
-    _scroll += delta * 3;
+    _list.wheel(delta);
     return true;
   }
 
@@ -289,4 +332,7 @@ class LogsView extends View {
     onTick(app);
     app.requestFrame();
   }
+
+  @override
+  void reset() => _list.reset();
 }

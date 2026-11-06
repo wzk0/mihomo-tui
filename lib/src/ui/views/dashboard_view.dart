@@ -5,11 +5,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import '../../service/system_proxy.dart';
 import '../../term/keys.dart';
 import '../../term/style.dart';
 import '../../term/width.dart';
 import '../../util/format.dart';
 import '../../util/proxy_chain.dart';
+import '../../util/traffic.dart';
 import '../app_context.dart';
 import '../list_state.dart';
 import '../overlay.dart';
@@ -39,6 +41,7 @@ class DashboardView extends View {
     final running = status?.running ?? false;
     final online = app.apiOnline;
     final mode = app.apiConfig?.mode ?? app.activeInfo?.mode;
+    final allowLan = app.apiConfig?.allowLan;
     return [
       _Action(
         running ? '停止核心' : '启动核心',
@@ -79,9 +82,23 @@ class DashboardView extends View {
         run: app.editActiveConfig,
       ),
       _Action(
+        '局域网代理',
+        enabled: online,
+        hint: '允许局域网内其它设备使用本机代理（allow-lan）',
+        marker: allowLan == null ? null : (allowLan ? '已开启' : '已关闭'),
+        markerActive: allowLan == true,
+        run: app.toggleAllowLan,
+      ),
+      _Action(
         '切换系统代理',
         enabled: app.activeInfo?.preferredProxyPort != null,
         hint: '一键写入/撤销 GNOME 或 Windows 系统代理',
+        marker: switch (app.systemProxyState) {
+          SystemProxyState.enabled => '已开启',
+          SystemProxyState.disabled => '已关闭',
+          _ => null,
+        },
+        markerActive: app.systemProxyState == SystemProxyState.enabled,
         run: app.toggleSystemProxy,
       ),
       _Action(
@@ -189,11 +206,14 @@ class DashboardView extends View {
         final selected = index == _list.selected;
         final rowRect = Rect(card.x + 1, card.y + 1 + row, card.width - 2, 1);
         final baseStyle = selected
-            ? theme.selectionStyle(focused: focused)
-            : Style(
-                fg: action.enabled ? theme.text : theme.muted, bg: theme.panel);
-        if (selected) painter.fill(rowRect, baseStyle);
-        painter.text(rowRect.x + 1, rowRect.y, selected ? '>' : ' ', baseStyle);
+            ? theme.selectionStyle()
+            : Style(fg: theme.muted, bg: theme.panel);
+        painter.text(
+          rowRect.x + 1,
+          rowRect.y,
+          selected ? '>' : ' ',
+          Style(fg: theme.accent, bg: baseStyle.bg, bold: selected),
+        );
         painter.text(
           rowRect.x + 3,
           rowRect.y,
@@ -205,7 +225,11 @@ class DashboardView extends View {
             rowRect.right - textWidth(action.marker!) - 2,
             rowRect.y,
             action.marker!,
-            Style(fg: theme.green, bg: baseStyle.bg, bold: true),
+            Style(
+              fg: action.markerActive ? theme.green : theme.muted,
+              bg: baseStyle.bg,
+              bold: action.markerActive,
+            ),
           );
         }
         final hint = action.hint;
@@ -340,13 +364,57 @@ class DashboardView extends View {
       onPress: panel == null ? null : () => app.openUrl(panel),
     ));
 
+    if (app.apiConfig?.allowLan == true) {
+      final port = info?.mixedPort ??
+          info?.port ??
+          info?.socksPort ??
+          app.activeInfo?.preferredProxyPort;
+      final address = app.lanAddress;
+      if (address != null) {
+        rows.add(_StatusRow(
+          '局域网代理',
+          port == null ? address : '$address:$port',
+          color: theme.accentSoft,
+        ));
+      }
+    }
+
+    final profile = app.repo.activeProfile;
+    if (profile != null) {
+      final summary = summarizeTraffic(
+        used: profile.trafficUsed,
+        total: profile.trafficTotal,
+        expire: profile.trafficExpireAt,
+      );
+      if (summary != null) {
+        final fraction = summary.fraction;
+        rows.add(_StatusRow(
+          '套餐',
+          summary.display,
+          color: fraction == null
+              ? theme.accentSoft
+              : fraction >= 0.9
+                  ? theme.red
+                  : fraction >= 0.7
+                      ? theme.yellow
+                      : theme.green,
+        ));
+      }
+    }
+
     final connections = app.connections;
+    rows.add(_StatusRow(
+      '连接',
+      connections == null ? '-' : '${connections.count} 个',
+    ));
     rows.add(_StatusRow(
       '流量',
       connections == null
           ? '-'
-          : '连接 ${connections.count} | 上行 ${formatBytes(connections.uploadTotal)}'
-              ' | 下行 ${formatBytes(connections.downloadTotal)}',
+          : '上行 ${formatBytes(connections.uploadTotal)}'
+              ' | 下行 ${formatBytes(connections.downloadTotal)}'
+              '（自核心启动）',
+      color: connections == null ? null : theme.accentSoft,
     ));
     return rows;
   }
@@ -432,6 +500,7 @@ class _Action {
     this.enabled = true,
     this.hint,
     this.marker,
+    this.markerActive = true,
   });
 
   final String label;
@@ -439,6 +508,7 @@ class _Action {
   final bool enabled;
   final String? hint;
   final String? marker;
+  final bool markerActive;
 }
 
 class _StatusRow {

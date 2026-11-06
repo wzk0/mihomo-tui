@@ -8,6 +8,7 @@ import '../service/autostart.dart';
 import '../service/core_updater.dart';
 import '../service/mihomo_api.dart';
 import '../service/mihomo_core.dart';
+import '../service/system_proxy.dart';
 import '../service/paths.dart';
 import '../service/profile_repo.dart';
 import '../term/terminal.dart';
@@ -94,6 +95,15 @@ abstract class AppContext {
   Future<void> cycleColorMode();
 
   Future<void> toggleSystemProxy();
+
+  /// Current OS proxy state (cached, refreshed periodically).
+  SystemProxyState get systemProxyState;
+
+  /// First non-loopback IPv4 address (for the LAN proxy row).
+  String? get lanAddress;
+
+  /// Toggles mihomo's `allow-lan` through the controller.
+  Future<void> toggleAllowLan();
 
   /// Login/boot autostart state of the core.
   AutostartState get autostartState;

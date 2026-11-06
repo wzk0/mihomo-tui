@@ -1,12 +1,18 @@
 /// A subscription profile managed by the app.
 library;
 
+import '../util/url.dart';
+
 class Profile {
   const Profile({
     required this.name,
     required this.url,
     this.updatedAt,
     this.size,
+    this.trafficUpload,
+    this.trafficDownload,
+    this.trafficTotal,
+    this.trafficExpireAt,
   });
 
   final String name;
@@ -14,17 +20,38 @@ class Profile {
   final DateTime? updatedAt;
   final int? size;
 
+  /// Provider reported traffic (bytes) from `Subscription-Userinfo`.
+  final int? trafficUpload;
+  final int? trafficDownload;
+  final int? trafficTotal;
+  final DateTime? trafficExpireAt;
+
+  int? get trafficUsed {
+    if (trafficUpload == null && trafficDownload == null) return null;
+    return (trafficUpload ?? 0) + (trafficDownload ?? 0);
+  }
+
+  bool get hasTraffic => trafficTotal != null || trafficUsed != null;
+
   Profile copyWith({
     String? name,
     String? url,
     DateTime? updatedAt,
     int? size,
+    int? trafficUpload,
+    int? trafficDownload,
+    int? trafficTotal,
+    DateTime? trafficExpireAt,
   }) {
     return Profile(
       name: name ?? this.name,
       url: url ?? this.url,
       updatedAt: updatedAt ?? this.updatedAt,
       size: size ?? this.size,
+      trafficUpload: trafficUpload ?? this.trafficUpload,
+      trafficDownload: trafficDownload ?? this.trafficDownload,
+      trafficTotal: trafficTotal ?? this.trafficTotal,
+      trafficExpireAt: trafficExpireAt ?? this.trafficExpireAt,
     );
   }
 
@@ -33,6 +60,11 @@ class Profile {
         'url': url,
         if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
         if (size != null) 'size': size,
+        if (trafficUpload != null) 'trafficUpload': trafficUpload,
+        if (trafficDownload != null) 'trafficDownload': trafficDownload,
+        if (trafficTotal != null) 'trafficTotal': trafficTotal,
+        if (trafficExpireAt != null)
+          'trafficExpire': trafficExpireAt!.toIso8601String(),
       };
 
   static Profile? fromJson(Object? json) {
@@ -44,11 +76,20 @@ class Profile {
     DateTime? updatedAt;
     if (updated is String) updatedAt = DateTime.tryParse(updated);
     final size = json['size'];
+    final expire = json['trafficExpire'];
     return Profile(
       name: name,
       url: url is String ? url : '',
       updatedAt: updatedAt,
       size: size is int ? size : null,
+      trafficUpload:
+          json['trafficUpload'] is int ? json['trafficUpload'] as int : null,
+      trafficDownload: json['trafficDownload'] is int
+          ? json['trafficDownload'] as int
+          : null,
+      trafficTotal:
+          json['trafficTotal'] is int ? json['trafficTotal'] as int : null,
+      trafficExpireAt: expire is String ? DateTime.tryParse(expire) : null,
     );
   }
 }
@@ -76,13 +117,9 @@ String? validateProfileName(String name) {
 }
 
 String? validateSubscriptionUrl(String url) {
-  final trimmed = url.trim();
-  if (trimmed.isEmpty) return '订阅地址不能为空';
-  final uri = Uri.tryParse(trimmed);
-  if (uri == null) return '订阅地址无效';
-  if (uri.scheme != 'http' && uri.scheme != 'https') {
-    return '仅支持 http/https 订阅地址';
+  if (url.trim().isEmpty) return '订阅地址不能为空';
+  if (normalizeHttpUri(url) == null) {
+    return '订阅地址无效（需要 http/https 地址，主机名不能含空格或特殊字符）';
   }
-  if (uri.host.isEmpty) return '订阅地址缺少主机名';
   return null;
 }

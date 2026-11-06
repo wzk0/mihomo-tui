@@ -214,11 +214,11 @@ class SettingsView extends View {
     for (var row = 0; row < visible; row++) {
       final index = _list.scroll + row;
       final entry = rows[index];
-      final selected = index == _list.selected && focused;
+      final selected = index == _list.selected;
       const rowHeight = 2;
       final rowStyle = selected
-          ? theme.selectionStyle(focused: focused)
-          : Style(fg: theme.text, bg: theme.panel);
+          ? theme.selectionStyle()
+          : Style(fg: theme.muted, bg: theme.panel);
       painter.text(
         inner.x,
         y,
@@ -229,10 +229,15 @@ class SettingsView extends View {
         inner.x + 2,
         y,
         truncate(entry.label, labelWidth),
-        Style(fg: theme.text, bg: rowStyle.bg, bold: true),
+        Style(
+            fg: selected ? theme.text : theme.muted,
+            bg: rowStyle.bg,
+            bold: selected),
       );
       final valueStyle = Style(
-        fg: entry.editable ? theme.accentSoft : theme.text,
+        fg: entry.editable
+            ? theme.accentSoft
+            : (selected ? theme.text : theme.muted),
         bg: rowStyle.bg,
       );
       painter.text(

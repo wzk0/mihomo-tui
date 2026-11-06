@@ -56,6 +56,21 @@ class Autostart {
     return AutostartState.enabled;
   }
 
+  /// PID of the running systemd user service (Linux only).
+  Future<int?> mainPid() async {
+    if (!Platform.isLinux) return null;
+    final output = await _run('systemctl', [
+      '--user',
+      'show',
+      '-p',
+      'MainPID',
+      '--value',
+      unitName,
+    ]);
+    final pid = int.tryParse(output?.trim() ?? '');
+    return pid == null || pid <= 0 ? null : pid;
+  }
+
   Future<AutostartResult> enable() async {
     if (Platform.isWindows) {
       final result = await _run('reg', [

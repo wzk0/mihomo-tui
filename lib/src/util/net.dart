@@ -13,6 +13,11 @@ String? envProxyDirective(Uri target, {String? explicit}) {
   if (raw == null) return null;
   final uri = Uri.tryParse(raw.contains('://') ? raw : 'http://$raw');
   if (uri == null || uri.host.isEmpty) return null;
+  // A host containing '%' (percent encoded / mangled proxy value) would make
+  // dart:io throw "is not a valid link-local address"; ignore it instead.
+  if (uri.host.contains('%') || uri.host.runes.any((r) => r > 0x7f)) {
+    return null;
+  }
   final port = uri.hasPort ? uri.port : 80;
   return 'PROXY ${uri.host}:$port';
 }

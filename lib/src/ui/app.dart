@@ -127,6 +127,10 @@ class App implements AppContext {
   DateTime? _coreStartedAt;
   AutostartState _autostartState = AutostartState.unknown;
   DateTime _autostartChecked = DateTime.fromMillisecondsSinceEpoch(0);
+  SystemProxyState _systemProxyState = SystemProxyState.unknown;
+  DateTime _systemProxyChecked = DateTime.fromMillisecondsSinceEpoch(0);
+  String? _lanAddress;
+  DateTime _lanAddressChecked = DateTime.fromMillisecondsSinceEpoch(0);
   final Map<String, MirrorProbe> _mirrorProbes = {};
   final Set<String> _mirrorProbing = {};
   CoreRelease? _releaseCache;
@@ -170,6 +174,12 @@ class App implements AppContext {
 
   @override
   AutostartState get autostartState => _autostartState;
+
+  @override
+  SystemProxyState get systemProxyState => _systemProxyState;
+
+  @override
+  String? get lanAddress => _lanAddress;
 
   @override
   bool get apiOnline => _apiOnline;
@@ -414,15 +424,18 @@ class App implements AppContext {
       final view = views[index];
       final selected = index == _viewIndex;
       final rowRect = Rect(rect.x + 1, y, rect.width - 2, 1);
+      final hoveringNav = _hoverId != null && _hoverId!.startsWith('nav');
       final hovered = _hoverId == 'nav$index';
-      final style = selected
-          ? theme.selectionStyle(focused: _sidebarFocused)
-          : hovered
-              ? theme.hoverStyle()
-              : Style(fg: theme.muted, bg: theme.panel);
-      if (selected || hovered) p.fill(rowRect, style);
-      if (selected) {
-        p.text(rect.x + 1, y, '>', Style(fg: theme.accent, bg: style.bg));
+      final style = Style(
+        fg: selected ? theme.accentSoft : (hovered ? theme.text : theme.muted),
+        bg: theme.panel,
+        bold: selected || hovered,
+      );
+      // The '>' marker follows the mouse while hovering the sidebar, but the
+      // displayed page only changes on click.
+      final cursor = hoveringNav ? hovered : selected;
+      if (cursor) {
+        p.text(rect.x + 1, y, '>', Style(fg: theme.accent, bg: theme.panel));
       }
       p.text(innerX + 1, y, truncate(view.label, innerWidth), style);
       p.text(
@@ -761,8 +774,9 @@ class App implements AppContext {
       (
         '日志',
         const [
-          KeyHint('s', '精简 / 标准视图'),
-          KeyHint('f', '跟随开关'),
+          KeyHint('s', '循环视图：标准 / 精简'),
+          KeyHint('Enter', '查看选中日志的详情'),
+          KeyHint('f', '跟随开关（跟随时不显示 > 列）'),
           KeyHint('r', '重新读取'),
           KeyHint('c', '清空日志'),
           KeyHint('g / G', '跳到开头 / 结尾'),
@@ -870,6 +884,8 @@ class App implements AppContext {
       await _refreshActiveInfo();
       await _refreshApi();
       await _refreshAutostart();
+      await _refreshSystemProxy();
+      await _refreshLanAddress();
     } finally {
       _refreshing = false;
       _dirty = true;
@@ -880,6 +896,60 @@ class App implements AppContext {
     final binary = core.resolveBinary();
     if (binary == null) return null;
     return Autostart(paths: paths, binary: binary);
+  }
+
+  Future<void> _refreshSystemProxy({bool force = false}) async {
+    if (!force &&
+        DateTime.now().difference(_systemProxyChecked) <
+            const Duration(seconds: 10)) {
+      return;
+    }
+    _systemProxyChecked = DateTime.now();
+    _systemProxyState = await SystemProxy.currentState();
+  }
+
+  /// First non-loopback IPv4 address, used for the "LAN proxy" summary row.
+  Future<void> _refreshLanAddress() async {
+    if (DateTime.now().difference(_lanAddressChecked) <
+        const Duration(seconds: 30)) {
+      return;
+    }
+    _lanAddressChecked = DateTime.now();
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      _lanAddress = null;
+      for (final interface in interfaces) {
+        for (final address in interface.addresses) {
+          if (address.isLoopback) continue;
+          _lanAddress ??= address.address;
+        }
+      }
+    } catch (_) {
+      _lanAddress = null;
+    }
+  }
+
+  @override
+  Future<void> toggleAllowLan() async {
+    final api = apiRef;
+    if (api == null) {
+      toast('控制器未连接，无法切换局域网代理', level: ToastLevel.warning);
+      return;
+    }
+    final enabled = _apiConfig?.allowLan ?? false;
+    try {
+      await api.setAllowLan(!enabled);
+      await _refreshServices();
+      toast(
+        !enabled ? '已开启局域网代理' : '已关闭局域网代理',
+        level: ToastLevel.success,
+      );
+    } on ApiException catch (error) {
+      toast('切换失败：${error.message}', level: ToastLevel.error);
+    }
   }
 
   Future<void> _refreshAutostart() async {
@@ -894,6 +964,12 @@ class App implements AppContext {
       return;
     }
     _autostartState = await autostart.state();
+    if (_autostartState == AutostartState.enabled) {
+      // The service started the core for us: adopt its pid so the overview
+      // shows a managed process instead of an "external" one.
+      final pid = await autostart.mainPid() ?? core.detectPid();
+      if (pid != null) core.adoptPid(pid);
+    }
   }
 
   @override
@@ -903,9 +979,27 @@ class App implements AppContext {
       proxy: _settings.downloadProxy,
     );
     final target = core.resolveBinary() ?? CoreUpdater.defaultInstallPath();
+    CoreRelease? release;
+    final current = _coreStatus?.version ?? await core.version();
+    await _runBusy('检查内核更新', () async {
+      try {
+        _busyLabel = '查询最新版本~';
+        _dirty = true;
+        release = await updater.latest();
+      } on CoreUpdateException catch (error) {
+        toast('检查更新失败：${error.message}', level: ToastLevel.error);
+        return;
+      }
+    });
+    final found = release;
+    if (found == null) return;
+    if (_sameVersion(current, found.tag)) {
+      toast('已是最新版 ${found.tag}', level: ToastLevel.success);
+      return;
+    }
     confirm(
-      title: '更新 mihomo 内核',
-      message: '从 GitHub 获取最新版本并替换内核文件。',
+      title: '发现新版本',
+      message: '${current ?? '未安装'} → ${found.tag}',
       detail: [
         '平台/架构：${CoreUpdater.platformLabel}',
         '下载源：${updater.mirror.label}',
@@ -913,17 +1007,25 @@ class App implements AppContext {
         '原文件会备份为 .bak',
       ],
       confirmLabel: '下载并安装',
-      onConfirm: () => unawaited(_runCoreUpdate(updater, target)),
+      onConfirm: () => unawaited(_runCoreUpdate(updater, target, found)),
     );
   }
 
-  Future<void> _runCoreUpdate(CoreUpdater updater, String target) async {
+  static bool _sameVersion(String? current, String tag) {
+    String normalize(String value) =>
+        value.replaceFirst(RegExp(r'^[vV]'), '').split(' ').first.trim();
+    if (current == null || current.isEmpty) return false;
+    return normalize(current) == normalize(tag);
+  }
+
+  Future<void> _runCoreUpdate(
+    CoreUpdater updater,
+    String target,
+    CoreRelease release,
+  ) async {
     final before = _coreStatus?.version;
     await _runBusy('更新内核', () async {
       try {
-        _busyLabel = '获取最新版本~';
-        _dirty = true;
-        final release = await updater.latest();
         _busyLabel = '下载 ${release.assetName}';
         _dirty = true;
         final result = await updater.install(
@@ -1056,6 +1158,8 @@ class App implements AppContext {
           enable ? await autostart.enable() : await autostart.disable();
       _autostartChecked = DateTime.fromMillisecondsSinceEpoch(0);
       await _refreshAutostart();
+      await _refreshSystemProxy();
+      await _refreshLanAddress();
       toast(
         result.message,
         level: result.ok ? ToastLevel.success : ToastLevel.error,
@@ -1705,16 +1809,7 @@ class App implements AppContext {
       return;
     }
     if (state == SystemProxyState.enabled) {
-      confirm(
-        title: '关闭系统代理',
-        message: '当前系统代理处于开启状态，确定要关闭吗？',
-        detail: const [
-          '如果它是其他工具（如 mihomo-party）设置的，关闭后那些程序会失去代理。',
-        ],
-        confirmLabel: '关闭',
-        danger: true,
-        onConfirm: () => unawaited(_disableSystemProxy()),
-      );
+      await _disableSystemProxy();
       return;
     }
     final info = _activeInfo;
@@ -1727,18 +1822,32 @@ class App implements AppContext {
       httpPort: info?.mixedPort ?? info?.port ?? port,
       socksPort: info?.socksPort ?? port,
     );
+    if (result.ok) {
+      _systemProxyState = SystemProxyState.enabled;
+      _systemProxyChecked = DateTime.now();
+      _dirty = true;
+    }
     toast(
       result.message,
       level: result.ok ? ToastLevel.success : ToastLevel.error,
     );
+    await _refreshSystemProxy(force: true);
+    _dirty = true;
   }
 
   Future<void> _disableSystemProxy() async {
     final result = await SystemProxy.disable();
+    if (result.ok) {
+      _systemProxyState = SystemProxyState.disabled;
+      _systemProxyChecked = DateTime.now();
+      _dirty = true;
+    }
     toast(
       result.message,
       level: result.ok ? ToastLevel.success : ToastLevel.error,
     );
+    await _refreshSystemProxy(force: true);
+    _dirty = true;
   }
 
   @override

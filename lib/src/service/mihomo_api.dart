@@ -174,6 +174,11 @@ class MihomoApi {
     await _request('PATCH', _uri('/configs'), body: {'mode': mode});
   }
 
+  /// Toggles `allow-lan` on the running core.
+  Future<void> setAllowLan(bool enabled) async {
+    await _request('PATCH', _uri('/configs'), body: {'allow-lan': enabled});
+  }
+
   Future<void> reload() async {
     await _request(
       'PUT',

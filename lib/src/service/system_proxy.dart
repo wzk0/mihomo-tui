@@ -64,11 +64,11 @@ class SystemProxy {
         ['set', 'org.gnome.system.proxy.socks', 'port', '$socks'],
         ['set', 'org.gnome.system.proxy', 'use-same-proxy', 'true'],
       ];
-      for (final command in commands) {
-        final result = await _run('gsettings', command);
-        if (result == null) {
-          return const SystemProxyResult(false, 'gsettings 执行失败');
-        }
+      final results = await Future.wait(
+        commands.map((command) => _run('gsettings', command)),
+      );
+      if (results.contains(null)) {
+        return const SystemProxyResult(false, 'gsettings 执行失败');
       }
       return SystemProxyResult(
         true,

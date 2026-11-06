@@ -32,6 +32,10 @@ void main() {
     server.listen((request) async {
       request.response.statusCode = statusCode;
       request.response.headers.contentType = ContentType.text;
+      request.response.headers.set(
+        'subscription-userinfo',
+        'upload=1048576; download=2097152; total=1073741824; expire=1893456000',
+      );
       request.response.write(payload);
       await request.response.close();
     });
@@ -78,6 +82,9 @@ void main() {
     expect(info?.mixedPort, 7890);
     expect(repo.profiles.single.size, greaterThan(0));
     expect(repo.profiles.single.updatedAt, isNotNull);
+    expect(repo.profiles.single.trafficTotal, 1073741824);
+    expect(repo.profiles.single.trafficUsed, 3145728);
+    expect(repo.profiles.single.trafficExpireAt?.year, 2030);
   });
 
   test('rejects duplicate names and invalid input', () async {

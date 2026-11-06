@@ -15,6 +15,21 @@ String formatBytes(int bytes) {
   return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
 }
 
+/// Compact byte size for table cells: `12.3G`, `850M`, `1.0T`.
+String formatBytesShort(int bytes) {
+  if (bytes < 1024) return '${bytes}B';
+  const units = ['K', 'M', 'G', 'T', 'P'];
+  var value = bytes / 1024;
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  final text =
+      value >= 100 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
+  return '$text${units[unit]}';
+}
+
 String formatDuration(Duration duration) {
   final seconds = duration.inSeconds;
   if (seconds < 0) return '--';

@@ -225,6 +225,13 @@ class MihomoCore {
     file.writeAsStringSync('$pid\n');
   }
 
+  /// Records [pid] as the managed core (used when the service started it).
+  void adoptPid(int pid) {
+    if (pid <= 0) return;
+    if (readPidFile() == pid) return;
+    writePidFile(pid);
+  }
+
   void clearPidFile() {
     final file = File(paths.pidFile);
     if (file.existsSync()) {

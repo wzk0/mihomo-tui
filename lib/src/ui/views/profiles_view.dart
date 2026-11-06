@@ -9,10 +9,12 @@ import '../../term/keys.dart';
 import '../../term/style.dart';
 import '../../term/width.dart';
 import '../../util/format.dart';
+import '../../util/traffic.dart';
 import '../app_context.dart';
 import '../list_state.dart';
 import '../overlay.dart';
 import '../painter.dart';
+import '../theme.dart';
 import 'view.dart';
 
 class ProfilesView extends View {
@@ -75,17 +77,28 @@ class ProfilesView extends View {
     _list.ensureVisible();
 
     // Column layout: marker | name | nodes | ports | updated | url
-    final nameWidth = (listInner.width * 0.22).round().clamp(10, 22);
+    final nameWidth = (listInner.width * 0.2).round().clamp(10, 20);
     const nodesWidth = 5;
-    var portsWidth = listInner.width > 92 ? 18 : 12;
+    var portsWidth = listInner.width > 92 ? 16 : 12;
+    const trafficWidth = 13;
     const updatedWidth = 11;
     var urlWidth = listInner.width -
-        (8 + nameWidth + nodesWidth + portsWidth + updatedWidth) -
+        (9 +
+            nameWidth +
+            nodesWidth +
+            portsWidth +
+            trafficWidth +
+            updatedWidth) -
         1;
     if (urlWidth < 12) {
       portsWidth = listInner.width > 70 ? 8 : 6;
       urlWidth = listInner.width -
-          (8 + nameWidth + nodesWidth + portsWidth + updatedWidth) -
+          (9 +
+              nameWidth +
+              nodesWidth +
+              portsWidth +
+              trafficWidth +
+              updatedWidth) -
           1;
     }
 
@@ -98,6 +111,8 @@ class ProfilesView extends View {
     x += nodesWidth + 1;
     painter.text(x, headerY, padRight('端口', portsWidth), headerStyle);
     x += portsWidth + 1;
+    painter.text(x, headerY, padRight('流量', trafficWidth), headerStyle);
+    x += trafficWidth + 1;
     painter.text(x, headerY, padRight('更新', updatedWidth), headerStyle);
     x += updatedWidth + 1;
     painter.text(x, headerY, truncate('订阅地址', urlWidth), headerStyle);
@@ -116,30 +131,26 @@ class ProfilesView extends View {
       final active = profile.name == app.repo.activeName;
       final rowY = listInner.y + headerRows + row;
       final rowRect = Rect(listInner.x, rowY, listInner.width, 1);
-      final rowStyle = selected
-          ? theme.selectionStyle(focused: focused)
-          : Style(fg: theme.text, bg: theme.panel);
       final info = app.repo.cachedInfo(profile.name);
 
       var columnX = listInner.x;
-      painter.text(columnX, rowY, selected ? '>' : ' ', rowStyle);
+      painter.text(
+        columnX,
+        rowY,
+        selected ? '>' : ' ',
+        Style(fg: theme.accent, bg: theme.panel, bold: selected),
+      );
       columnX += 2;
       final nameStyle = Style(
-        fg: active ? theme.green : theme.text,
+        fg: active ? theme.green : (selected ? theme.text : theme.muted),
         bg: theme.panel,
         bold: active || selected,
       );
       painter.text(
         columnX,
         rowY,
-        padRight(profile.name, nameWidth - 1),
+        padRight(active ? '${profile.name} *' : profile.name, nameWidth),
         nameStyle,
-      );
-      painter.text(
-        columnX + nameWidth - 1,
-        rowY,
-        active ? '*' : ' ',
-        Style(fg: theme.green, bg: theme.panel, bold: true),
       );
       columnX += nameWidth + 1;
       final nodes = info?.nodeCount;
@@ -160,6 +171,13 @@ class ProfilesView extends View {
         Style(fg: theme.accentSoft, bg: theme.panel),
       );
       columnX += portsWidth + 1;
+      painter.text(
+        columnX,
+        rowY,
+        padRight(_trafficCell(profile), trafficWidth),
+        Style(fg: theme.accentSoft, bg: theme.panel),
+      );
+      columnX += trafficWidth + 1;
       final updated =
           profile.updatedAt == null ? '-' : formatRelative(profile.updatedAt!);
       painter.text(
@@ -229,6 +247,7 @@ class ProfilesView extends View {
         info.portSummary.isEmpty ? '未定义' : info.portSummary.join(' | '),
         theme.accentSoft,
       ));
+      rows.add(_trafficRow(profile, app.theme) ?? ('流量', '-', null));
       rows.add((
         '控制器',
         '${info.controllerAddress ?? '未定义'} | 模式 ${info.mode}'
@@ -288,6 +307,38 @@ class ProfilesView extends View {
       focused: focused,
       title: '详情 | ${profile.name} | 点击查看全部',
     );
+  }
+
+  /// Compact `used/total` text for the table column.
+  String _trafficCell(Profile profile) {
+    final used = profile.trafficUsed;
+    final total = profile.trafficTotal;
+    if (used == null && total == null) return '-';
+    if (used != null && total != null && total > 0) {
+      return '${formatBytesShort(used)}/${formatBytesShort(total)}';
+    }
+    if (used != null) return formatBytesShort(used);
+    return '-';
+  }
+
+  /// Detail row with an ASCII progress bar (hidden when the provider does not
+  /// report traffic).
+  (String, String, int?)? _trafficRow(Profile profile, Theme theme) {
+    final summary = summarizeTraffic(
+      used: profile.trafficUsed,
+      total: profile.trafficTotal,
+      expire: profile.trafficExpireAt,
+    );
+    if (summary == null) return null;
+    final fraction = summary.fraction;
+    final color = fraction == null
+        ? theme.accentSoft
+        : fraction >= 0.9
+            ? theme.red
+            : fraction >= 0.7
+                ? theme.yellow
+                : theme.green;
+    return ('流量', summary.display, color);
   }
 
   void _drawEmpty(AppContext app, Painter painter, Rect area) {

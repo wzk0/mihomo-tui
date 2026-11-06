@@ -9,6 +9,7 @@ import '../model/profile.dart';
 import '../model/profile_info.dart';
 import '../model/settings.dart';
 import 'downloader.dart';
+import '../util/url.dart';
 import 'paths.dart';
 import 'store.dart';
 
@@ -142,13 +143,15 @@ class ProfileRepository {
     final urlError = validateSubscriptionUrl(url);
     if (urlError != null) throw ProfileException(urlError);
     if (byName(name) != null) throw ProfileException('已存在同名配置「$name」');
+    final normalizedUrl = normalizeHttpUri(url)!.toString();
 
     final target = File(profileFile(name));
-    final bytes = await _downloaderFactory().fetchToFile(
-      url.trim(),
+    final result = await _downloaderFactory().fetchToFile(
+      normalizedUrl,
       target,
       onProgress: onProgress,
     );
+    final bytes = result.bytes;
     ProfileInfo info;
     try {
       info = ProfileInfo.parse(target.readAsStringSync());
@@ -164,9 +167,13 @@ class ProfileRepository {
     }
     data.profiles.add(Profile(
       name: name,
-      url: url.trim(),
+      url: normalizedUrl,
       updatedAt: DateTime.now(),
       size: bytes,
+      trafficUpload: result.info?.upload,
+      trafficDownload: result.info?.download,
+      trafficTotal: result.info?.total,
+      trafficExpireAt: result.info?.expireAt,
     ));
     invalidateCache(name);
     _persist();
@@ -178,16 +185,22 @@ class ProfileRepository {
   }) async {
     final urlError = validateSubscriptionUrl(profile.url);
     if (urlError != null) throw ProfileException('「${profile.name}」$urlError');
-    final bytes = await _downloaderFactory().fetchToFile(
-      profile.url,
+    final url = normalizeHttpUri(profile.url)?.toString() ?? profile.url;
+    final result = await _downloaderFactory().fetchToFile(
+      url,
       File(profileFile(profile.name)),
       onProgress: onProgress,
     );
     final index = data.profiles.indexWhere((p) => p.name == profile.name);
     if (index >= 0) {
+      final info = result.info;
       data.profiles[index] = data.profiles[index].copyWith(
         updatedAt: DateTime.now(),
-        size: bytes,
+        size: result.bytes,
+        trafficUpload: info?.upload,
+        trafficDownload: info?.download,
+        trafficTotal: info?.total,
+        trafficExpireAt: info?.expireAt,
       );
       invalidateCache(profile.name);
       _persist();
@@ -205,6 +218,7 @@ class ProfileRepository {
     if (nameError != null) throw ProfileException(nameError);
     final urlError = validateSubscriptionUrl(url);
     if (urlError != null) throw ProfileException(urlError);
+    final normalizedUrl = normalizeHttpUri(url)!.toString();
 
     var current = profile;
     if (name != profile.name) {
@@ -214,7 +228,7 @@ class ProfileRepository {
     }
     final index = data.profiles.indexWhere((p) => p.name == current.name);
     if (index >= 0) {
-      data.profiles[index] = data.profiles[index].copyWith(url: url.trim());
+      data.profiles[index] = data.profiles[index].copyWith(url: normalizedUrl);
       current = data.profiles[index];
       _persist();
     }

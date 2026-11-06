@@ -172,7 +172,7 @@ class ProxiesView extends View {
       final rowRect =
           Rect(innerRight.x, innerRight.y + row, innerRight.width, 1);
       final style = selected
-          ? theme.selectionStyle(focused: focused && _pane == 1)
+          ? theme.selectionStyle()
           : Style(fg: theme.text, bg: theme.panel);
       painter.text(
         rowRect.x,
@@ -190,7 +190,11 @@ class ProxiesView extends View {
         rowRect.x + 4,
         rowRect.y,
         truncate(name, rowRect.width - delayWidth - 7),
-        Style(fg: isNow ? theme.green : theme.text, bg: style.bg, bold: isNow),
+        Style(
+          fg: isNow ? theme.green : (selected ? theme.text : theme.muted),
+          bg: style.bg,
+          bold: isNow || selected,
+        ),
       );
       final delay = _delays.containsKey(name) ? _delays[name] : node?.delay;
       final delayText = _testing.contains(name)
